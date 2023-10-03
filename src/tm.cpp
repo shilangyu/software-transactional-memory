@@ -14,7 +14,9 @@
  **/
 
 // Requested features
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #define _POSIX_C_SOURCE 200809L
 #ifdef __STDC_NO_ATOMICS__
 #error Current C11 compiler does not support atomic operations
