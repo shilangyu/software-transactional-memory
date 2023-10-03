@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Print GCC version
+        run: |
+          gcc --version
+          g++ --version
+
+      - name: Compile
+        run: |
+          make
+
+      - name: Run grader
+        working-directory: grading
+        run: |
+          make build-libs run
