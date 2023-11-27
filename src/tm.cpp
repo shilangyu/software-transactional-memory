@@ -25,9 +25,30 @@
 // External headers
 
 // Internal headers
+#include <atomic>
+#include <new>
 #include <tm.hpp>
 
 #include "macros.hpp"
+
+struct Region {
+  inline Region(const std::size_t size, const std::size_t align) noexcept
+      : size(size), align(align) {}
+  inline ~Region() noexcept {}
+
+  const std::size_t size;
+  const std::size_t align;
+  std::atomic_size_t version_clock = 0;
+};
+
+struct Transaction {
+  inline Transaction(bool is_read_only, std::size_t read_version) noexcept
+      : is_read_only(is_read_only), read_version(read_version) {}
+  inline ~Transaction() noexcept {}
+
+  const bool is_read_only;
+  const std::size_t read_version;
+};
 
 /** Create (i.e. allocate + init) a new shared memory region, with one first
  *non-free-able allocated segment of the requested size and alignment.
@@ -37,16 +58,23 @@
  *memory region must support
  * @return Opaque shared memory region handle, 'invalid_shared' on failure
  **/
-shared_t tm_create(size_t unused(size), size_t unused(align)) noexcept {
-  // TODO: tm_create(size_t, size_t)
-  return invalid_shared;
+shared_t tm_create(size_t size, size_t align) noexcept {
+  Region* region = new (std::nothrow) Region{size, align};
+  if (region == nullptr) {
+    return invalid_shared;
+  }
+
+  // TODO: std::align_val_t(align) for segments
+
+  return region;
 }
 
 /** Destroy (i.e. clean-up + free) a given shared memory region.
  * @param shared Shared memory region to destroy, with no running transaction
  **/
-void tm_destroy(shared_t unused(shared)) noexcept {
-  // TODO: tm_destroy(shared_t)
+void tm_destroy(shared_t shared) noexcept {
+  Region* region = static_cast<Region*>(shared);
+  delete region;
 }
 
 /** [thread-safe] Return the start address of the first allocated segment in the
@@ -74,9 +102,8 @@ size_t tm_size(shared_t unused(shared)) noexcept {
  * @param shared Shared memory region to query
  * @return Alignment used globally
  **/
-size_t tm_align(shared_t unused(shared)) noexcept {
-  // TODO: tm_align(shared_t)
-  return 0;
+size_t tm_align(shared_t shared) noexcept {
+  return static_cast<Region*>(shared)->align;
 }
 
 /** [thread-safe] Begin a new transaction on the given shared memory region.
@@ -84,7 +111,14 @@ size_t tm_align(shared_t unused(shared)) noexcept {
  * @param is_ro  Whether the transaction is read-only
  * @return Opaque transaction ID, 'invalid_tx' on failure
  **/
-tx_t tm_begin(shared_t unused(shared), bool unused(is_ro)) noexcept {
+tx_t tm_begin(shared_t shared, bool is_ro) noexcept {
+  Region* region = static_cast<Region*>(shared);
+
+  Transaction* transaction =
+      new (std::nothrow) Transaction{is_ro, region->version_clock};
+  if (transaction == nullptr) {
+    return invalid_tx;
+  }
   // TODO: tm_begin(shared_t)
   return invalid_tx;
 }
