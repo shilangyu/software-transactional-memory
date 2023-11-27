@@ -2,3 +2,4 @@
 *.so
 
 grading/grading
+.vscode/
