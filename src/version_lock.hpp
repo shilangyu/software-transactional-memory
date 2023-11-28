@@ -7,11 +7,27 @@ struct VersionLock {
   std::atomic<std::uint64_t> lock = 0;
 
  public:
-  auto try_lock() -> bool;
+  inline auto try_lock() -> bool {
+    std::uint64_t value = lock;
+
+    if (value & 0b1) {
+      return false;
+    }
+
+    return lock.compare_exchange_strong(value, value | 0b1);
+  }
 
   /// UB if was not actually locked
-  auto unlock() -> void;
+  inline auto unlock() -> void { lock.fetch_sub(1); }
 
   /// -1 if locked, otherwise the version
-  auto read_version() -> std::int64_t;
+  inline auto read_version() -> std::int64_t {
+    std::uint64_t value = lock;
+
+    if (value & 0b1) {
+      return -1;
+    }
+
+    return value >> 1;
+  }
 };
