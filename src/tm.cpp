@@ -48,7 +48,21 @@ struct Transaction : NonCopyable {
 
   const bool is_read_only;
   const std::size_t read_version;
-};
+namespace virtual_address {
+/// A virtual address encoding the block index and word offset.
+using VirtualAddress = std::uintptr_t;
+constexpr std::size_t OFFSET_SIZE = 48;
+
+inline auto encode(const std::size_t block_index, const std::size_t offset)
+    -> VirtualAddress {
+  return (block_index << OFFSET_SIZE) | offset;
+}
+
+inline auto decode(const VirtualAddress address)
+    -> std::tuple<std::size_t, std::size_t> {
+  return {address >> OFFSET_SIZE, address & ((1 << OFFSET_SIZE) - 1)};
+}
+}  // namespace virtual_address
 
 /** Create (i.e. allocate + init) a new shared memory region, with one first
  *non-free-able allocated segment of the requested size and alignment.
@@ -83,8 +97,7 @@ void tm_destroy(shared_t shared) noexcept {
  * @return Start address of the first allocated segment
  **/
 void* tm_start(shared_t unused(shared)) noexcept {
-  // TODO: tm_start(shared_t)
-  return NULL;
+  return reinterpret_cast<void*>(virtual_address::encode(0, 0));
 }
 
 /** [thread-safe] Return the size (in bytes) of the first allocated segment of
