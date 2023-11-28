@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <cassert>
+#include <cstring>
 #include <forward_list>
 #include <new>
 #include <tm.hpp>
@@ -182,7 +183,7 @@ bool tm_read(shared_t shared,
       static_cast<Transaction*>(reinterpret_cast<void*>(tx));
 
   const std::size_t count = size / region->align;
-  auto [block_index, block_offset] =
+  const auto [block_index, block_offset] =
       virtual_address::decode(reinterpret_cast<uintptr_t>(source));
   const std::size_t word_index = block_offset / region->align;
 
@@ -236,13 +237,28 @@ bool tm_read(shared_t shared,
  * @param target Target start address (in the shared region)
  * @return Whether the whole transaction can continue
  **/
-bool tm_write(shared_t unused(shared),
-              tx_t unused(tx),
+bool tm_write(shared_t shared,
+              tx_t tx,
               void const* unused(source),
-              size_t unused(size),
-              void* unused(target)) noexcept {
-  // TODO: tm_write(shared_t, tx_t, void const*, size_t, void*)
-  return false;
+              size_t size,
+              void* target) noexcept {
+  Region* region = static_cast<Region*>(shared);
+  Transaction* transaction =
+      static_cast<Transaction*>(reinterpret_cast<void*>(tx));
+
+  const std::size_t count = size / region->align;
+  const std::size_t virtual_address_start = reinterpret_cast<uintptr_t>(target);
+
+  for (size_t i = 0; i < count; i++) {
+    std::uint64_t value = 0;
+    std::memcpy(&value,
+                reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(source) +
+                                        i * region->align),
+                region->align);
+    transaction->write_set[virtual_address_start + i * region->align] = value;
+  }
+
+  return true;
 }
 
 /** [thread-safe] Memory allocation in the given transaction.
