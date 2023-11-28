@@ -1,18 +1,3 @@
-/**
- * @file   tm.c
- * @author [...]
- *
- * @section LICENSE
- *
- * [...]
- *
- * @section DESCRIPTION
- *
- * Implementation of your own transaction manager.
- * You can completely rewrite this file (and create more files) as you wish.
- * Only the interface (i.e. exported symbols and semantic) must be preserved.
- **/
-
 // Requested features
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -22,26 +7,41 @@
 #error Current C11 compiler does not support atomic operations
 #endif
 
-// External headers
-
-// Internal headers
 #include <atomic>
+#include <cassert>
 #include <new>
 #include <tm.hpp>
+#include <tuple>
+#include <unordered_map>
+#include <vector>
 
+#include "common.hpp"
 #include "macros.hpp"
+#include "version_lock.hpp"
 
-struct Region {
-  inline Region(const std::size_t size, const std::size_t align) noexcept
-      : size(size), align(align) {}
-  inline ~Region() noexcept {}
+struct Block : NonCopyable {
+  inline Block(const std::size_t size) noexcept { words.resize(size); }
+  inline ~Block() noexcept {}
 
-  const std::size_t size;
-  const std::size_t align;
-  std::atomic_size_t version_clock = 0;
+  struct BlockItem {
+    VersionLock version_lock{};
+    std::uint64_t data = 0;
+  };
+
+  std::vector<BlockItem> words{};
 };
 
-struct Transaction {
+struct Region : NonCopyable {
+  inline Region(const std::size_t size, const std::size_t align) noexcept
+      : align(align), initial_block(size) {}
+  inline ~Region() noexcept {}
+
+  const std::size_t align;
+  std::atomic_size_t version_clock = 0;
+  Block initial_block;
+};
+
+struct Transaction : NonCopyable {
   inline Transaction(bool is_read_only, std::size_t read_version) noexcept
       : is_read_only(is_read_only), read_version(read_version) {}
   inline ~Transaction() noexcept {}
