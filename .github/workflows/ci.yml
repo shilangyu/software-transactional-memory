@@ -23,6 +23,7 @@ jobs:
           g++ --version
 
       - name: Compile
+        working-directory: src
         run: |
           make
 
