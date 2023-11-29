@@ -11,6 +11,7 @@
 #include <cassert>
 #include <cstring>
 #include <forward_list>
+#include <map>
 #include <new>
 #include <tm.hpp>
 #include <tuple>
@@ -50,18 +51,18 @@ struct Region : NonCopyable {
   }
 
   const std::size_t align;
-  std::atomic_size_t version_clock = 0;
+  std::atomic<std::uint64_t> version_clock = 0;
   std::forward_list<Block> blocks{};
 };
 
 struct Transaction : NonCopyable {
-  inline Transaction(bool is_read_only, std::size_t read_version) noexcept
+  inline Transaction(bool is_read_only, std::uint64_t read_version) noexcept
       : is_read_only(is_read_only), read_version(read_version) {}
   inline ~Transaction() noexcept {}
 
   const bool is_read_only;
-  const std::int64_t read_version;
-  std::unordered_map<uintptr_t, std::uint64_t> write_set;
+  const std::uint64_t read_version;
+  std::map<uintptr_t, std::uint64_t> write_set;
   std::unordered_set<uintptr_t> read_set;
 };
 
@@ -72,12 +73,12 @@ constexpr std::size_t OFFSET_SIZE = 48;
 
 inline auto encode(const std::size_t block_index, const std::size_t offset)
     -> VirtualAddress {
-  return (block_index << OFFSET_SIZE) | offset;
+  return ((block_index + 1) << OFFSET_SIZE) | offset;
 }
 
 inline auto decode(const VirtualAddress address)
     -> std::tuple<std::size_t, std::size_t> {
-  return {address >> OFFSET_SIZE,
+  return {(address >> OFFSET_SIZE) - 1,
           address & ((static_cast<uint64_t>(1) << OFFSET_SIZE) - 1)};
 }
 }  // namespace virtual_address
@@ -95,8 +96,6 @@ shared_t tm_create(size_t size, size_t align) noexcept {
   if (region == nullptr) {
     return invalid_shared;
   }
-
-  // TODO: std::align_val_t(align) for segments
 
   return region;
 }
@@ -124,7 +123,8 @@ void* tm_start(shared_t unused(shared)) noexcept {
  * @return First allocated segment size
  **/
 size_t tm_size(shared_t shared) noexcept {
-  return static_cast<Region*>(shared)->blocks.begin()->words.size();
+  Region* region = static_cast<Region*>(shared);
+  return region->blocks.begin()->words.size() * region->align;
 }
 
 /** [thread-safe] Return the alignment (in bytes) of the memory accesses on the
@@ -159,8 +159,77 @@ tx_t tm_begin(shared_t shared, bool is_ro) noexcept {
  * @return Whether the whole transaction committed
  **/
 bool tm_end(shared_t unused(shared), tx_t unused(tx)) noexcept {
-  // TODO: tm_end(shared_t, tx_t)
-  return false;
+  Region* region = static_cast<Region*>(shared);
+  Transaction* transaction =
+      static_cast<Transaction*>(reinterpret_cast<void*>(tx));
+
+  if (transaction->is_read_only || transaction->write_set.empty()) {
+    delete transaction;
+    return true;
+  }
+
+  for (const auto [addr, value] : transaction->write_set) {
+    const auto [block_index, block_offset] = virtual_address::decode(addr);
+    const std::size_t word_index = block_offset / region->align;
+    Block::Word& word = region->nth_block(block_index)->words[word_index];
+
+    if (!word.version_lock.try_lock()) {
+      for (const auto [delete_addr, value] : transaction->write_set) {
+        if (delete_addr == addr) {
+          break;
+        }
+        const auto [block_index, block_offset] =
+            virtual_address::decode(delete_addr);
+        const std::size_t word_index = block_offset / region->align;
+        Block::Word& word = region->nth_block(block_index)->words[word_index];
+
+        word.version_lock.unlock();
+      }
+
+      delete transaction;
+      return false;
+    }
+  }
+
+  std::uint64_t write_version = region->version_clock.fetch_add(1) + 1;
+
+  if (transaction->read_version + 1 != write_version) {
+    for (const auto addr : transaction->read_set) {
+      const auto [block_index, block_offset] = virtual_address::decode(addr);
+      const std::size_t word_index = block_offset / region->align;
+      Block::Word& word = region->nth_block(block_index)->words[word_index];
+
+      std::int64_t read_version = word.version_lock.read_version();
+      if (read_version == -1 || static_cast<std::uint64_t>(read_version) >
+                                    transaction->read_version) {
+        for (const auto [addr, value] : transaction->write_set) {
+          const auto [block_index, block_offset] =
+              virtual_address::decode(addr);
+          const std::size_t word_index = block_offset / region->align;
+          Block::Word& word = region->nth_block(block_index)->words[word_index];
+
+          word.version_lock.unlock();
+        }
+
+        delete transaction;
+        return false;
+      }
+    }
+  }
+
+  for (const auto [addr, value] : transaction->write_set) {
+    const auto [block_index, block_offset] = virtual_address::decode(addr);
+    const std::size_t word_index = block_offset / region->align;
+    Block::Word& word = region->nth_block(block_index)->words[word_index];
+
+    std::memcpy(&word.data, &value, region->align);
+
+    word.version_lock.unlock_with_version(write_version);
+  }
+
+  delete transaction;
+
+  return true;
 }
 
 /** [thread-safe] Read operation in the given transaction, source in the shared
@@ -182,12 +251,12 @@ bool tm_read(shared_t shared,
   Transaction* transaction =
       static_cast<Transaction*>(reinterpret_cast<void*>(tx));
 
-  const std::size_t count = size / region->align;
+  const std::size_t word_count = size / region->align;
   const auto [block_index, block_offset] =
       virtual_address::decode(reinterpret_cast<uintptr_t>(source));
   const std::size_t word_index = block_offset / region->align;
 
-  for (size_t i = 0; i < count; i++) {
+  for (size_t i = 0; i < word_count; i++) {
     const uintptr_t addr =
         reinterpret_cast<uintptr_t>(source) + i * region->align;
 
@@ -201,11 +270,13 @@ bool tm_read(shared_t shared,
                                           i * region->align),
                   &value, region->align);
     } else {
-      Block::Word& word = region->nth_block(block_index)->words[word_index + i];
-      std::int64_t read_version = word.version_lock.read_version();
+      const Block::Word& word =
+          region->nth_block(block_index)->words[word_index + i];
+      const std::int64_t read_version = word.version_lock.read_version();
 
-      if (read_version == -1 || read_version > transaction->read_version) {
-        // TODO: cleanup transaction
+      if (read_version == -1 || static_cast<std::uint64_t>(read_version) >
+                                    transaction->read_version) {
+        delete transaction;
         return false;
       }
 
@@ -216,7 +287,7 @@ bool tm_read(shared_t shared,
                   &word.data, region->align);
 
       if (word.version_lock.read_version() != read_version) {
-        // TODO: cleanup transaction
+        delete transaction;
         return false;
       }
 
@@ -239,17 +310,17 @@ bool tm_read(shared_t shared,
  **/
 bool tm_write(shared_t shared,
               tx_t tx,
-              void const* unused(source),
+              void const* source,
               size_t size,
               void* target) noexcept {
   Region* region = static_cast<Region*>(shared);
   Transaction* transaction =
       static_cast<Transaction*>(reinterpret_cast<void*>(tx));
 
-  const std::size_t count = size / region->align;
+  const std::size_t word_count = size / region->align;
   const std::size_t virtual_address_start = reinterpret_cast<uintptr_t>(target);
 
-  for (size_t i = 0; i < count; i++) {
+  for (size_t i = 0; i < word_count; i++) {
     std::uint64_t value = 0;
     std::memcpy(&value,
                 reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(source) +
