@@ -24,11 +24,14 @@ LD       := $(if $(SRCS_CXX),$(CXX),$(CC))
 LDFLAGS  := -shared
 LDLIBS   :=
 
+ARCHIVE := 376886.zip
+
 .PHONY: build clean
 
 build: $(BIN)
 clean:
 	$(RM) $(OBJS) $(BIN)
+	$(RM) $(ARCHIVE)
 
 define BUILD_C
 %.$(1).o: %.$(1) $$(HDRS_C) Makefile
@@ -44,3 +47,7 @@ $(foreach EXT,$(EXT_CXX),$(eval $(call BUILD_CXX,$(EXT))))
 
 $(BIN): $(OBJS) Makefile
 	$(LD) $(LDFLAGS) -o $@ $(OBJS) $(LDLIBS)
+
+archive:
+	make clean
+	cd ..; 7z a src/$(ARCHIVE) src/
