@@ -158,7 +158,7 @@ tx_t tm_begin(shared_t shared, bool is_ro) noexcept {
  * @param tx     Transaction to end
  * @return Whether the whole transaction committed
  **/
-bool tm_end(shared_t unused(shared), tx_t unused(tx)) noexcept {
+bool tm_end(shared_t shared, tx_t tx) noexcept {
   Region* region = static_cast<Region*>(shared);
   Transaction* transaction =
       static_cast<Transaction*>(reinterpret_cast<void*>(tx));
