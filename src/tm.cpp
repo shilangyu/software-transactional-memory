@@ -260,8 +260,25 @@ bool tm_read(shared_t shared,
     const uintptr_t addr =
         reinterpret_cast<uintptr_t>(source) + i * region->align;
 
-    if (auto it = transaction->write_set.find(addr);
-        it != transaction->write_set.end()) {
+    if (transaction->is_read_only) {
+      const Block::Word& word =
+          region->nth_block(block_index)->words[word_index + i];
+      const std::uint64_t value = word.data;
+      const std::int64_t read_version = word.version_lock.read_version();
+
+      if (read_version == -1 || static_cast<std::uint64_t>(read_version) >
+                                    transaction->read_version) {
+        delete transaction;
+        return false;
+      }
+
+      // TODO: see if we can replace memcpy with a simple assign (word is
+      // uint64)
+      std::memcpy(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(target) +
+                                          i * region->align),
+                  &value, region->align);
+    } else if (auto it = transaction->write_set.find(addr);
+               it != transaction->write_set.end()) {
       std::uint64_t value = it->second;
 
       // TODO: see if we can replace memcpy with a simple assign (word is
