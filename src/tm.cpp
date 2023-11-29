@@ -10,8 +10,9 @@
 #include <atomic>
 #include <cassert>
 #include <cstring>
-#include <forward_list>
+#include <list>
 #include <map>
+#include <mutex>
 #include <new>
 #include <tm.hpp>
 #include <tuple>
@@ -39,20 +40,20 @@ struct Region : NonCopyable {
   inline Region(const std::size_t size, const std::size_t align) noexcept
       : align(align) {
     // initial block
-    blocks.emplace_front(size);
+    blocks.emplace_back(size / align);
   }
   inline ~Region() noexcept {}
 
-  inline auto nth_block(const std::size_t i)
-      -> std::forward_list<Block>::iterator {
+  inline auto ith_block(const std::size_t i) -> std::list<Block>::iterator {
     auto nth = blocks.begin();
     std::advance(nth, i);
     return nth;
   }
 
   const std::size_t align;
+  std::mutex alloc_mutex;
   std::atomic<std::uint64_t> version_clock = 0;
-  std::forward_list<Block> blocks{};
+  std::list<Block> blocks{};
 };
 
 struct Transaction : NonCopyable {
@@ -171,7 +172,7 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
   for (const auto [addr, value] : transaction->write_set) {
     const auto [block_index, block_offset] = virtual_address::decode(addr);
     const std::size_t word_index = block_offset / region->align;
-    Block::Word& word = region->nth_block(block_index)->words[word_index];
+    Block::Word& word = region->ith_block(block_index)->words[word_index];
 
     if (!word.version_lock.try_lock()) {
       for (const auto [delete_addr, value] : transaction->write_set) {
@@ -181,7 +182,7 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
         const auto [block_index, block_offset] =
             virtual_address::decode(delete_addr);
         const std::size_t word_index = block_offset / region->align;
-        Block::Word& word = region->nth_block(block_index)->words[word_index];
+        Block::Word& word = region->ith_block(block_index)->words[word_index];
 
         word.version_lock.unlock();
       }
@@ -197,7 +198,7 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
     for (const auto addr : transaction->read_set) {
       const auto [block_index, block_offset] = virtual_address::decode(addr);
       const std::size_t word_index = block_offset / region->align;
-      Block::Word& word = region->nth_block(block_index)->words[word_index];
+      Block::Word& word = region->ith_block(block_index)->words[word_index];
 
       std::int64_t read_version = word.version_lock.read_version();
       if (read_version == -1 || static_cast<std::uint64_t>(read_version) >
@@ -206,7 +207,7 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
           const auto [block_index, block_offset] =
               virtual_address::decode(addr);
           const std::size_t word_index = block_offset / region->align;
-          Block::Word& word = region->nth_block(block_index)->words[word_index];
+          Block::Word& word = region->ith_block(block_index)->words[word_index];
 
           word.version_lock.unlock();
         }
@@ -220,7 +221,7 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
   for (const auto [addr, value] : transaction->write_set) {
     const auto [block_index, block_offset] = virtual_address::decode(addr);
     const std::size_t word_index = block_offset / region->align;
-    Block::Word& word = region->nth_block(block_index)->words[word_index];
+    Block::Word& word = region->ith_block(block_index)->words[word_index];
 
     std::memcpy(&word.data, &value, region->align);
 
@@ -262,7 +263,7 @@ bool tm_read(shared_t shared,
 
     if (transaction->is_read_only) {
       const Block::Word& word =
-          region->nth_block(block_index)->words[word_index + i];
+          region->ith_block(block_index)->words[word_index + i];
       const std::uint64_t value = word.data;
       const std::int64_t read_version = word.version_lock.read_version();
 
@@ -288,7 +289,7 @@ bool tm_read(shared_t shared,
                   &value, region->align);
     } else {
       const Block::Word& word =
-          region->nth_block(block_index)->words[word_index + i];
+          region->ith_block(block_index)->words[word_index + i];
       const std::int64_t read_version = word.version_lock.read_version();
 
       if (read_version == -1 || static_cast<std::uint64_t>(read_version) >
@@ -359,12 +360,19 @@ bool tm_write(shared_t shared,
  * @return Whether the whole transaction can continue (success/nomem), or not
  *(abort_alloc)
  **/
-Alloc tm_alloc(shared_t unused(shared),
-               tx_t unused(tx),
-               size_t unused(size),
-               void** unused(target)) noexcept {
-  // TODO: tm_alloc(shared_t, tx_t, size_t, void**)
-  return Alloc::abort;
+Alloc tm_alloc(shared_t shared, tx_t tx, size_t size, void** target) noexcept {
+  Region* region = static_cast<Region*>(shared);
+  Transaction* transaction =
+      static_cast<Transaction*>(reinterpret_cast<void*>(tx));
+
+  {
+    std::lock_guard<std::mutex> guard(region->alloc_mutex);
+    std::size_t block_index = region->blocks.size();
+    region->blocks.emplace_back(size / region->align);
+    *target = reinterpret_cast<void*>(virtual_address::encode(block_index, 0));
+  }
+
+  return Alloc::success;
 }
 
 /** [thread-safe] Memory freeing in the given transaction.
@@ -378,5 +386,5 @@ bool tm_free(shared_t unused(shared),
              tx_t unused(tx),
              void* unused(target)) noexcept {
   // TODO: tm_free(shared_t, tx_t, void*)
-  return false;
+  return true;
 }
