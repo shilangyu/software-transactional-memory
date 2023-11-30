@@ -186,12 +186,12 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
 
   for (auto it = transaction->write_set.begin();
        it != transaction->write_set.end(); ++it) {
-    if (!retry_yield<YIELD_RETRIES>(
-            [it] { return it->second.word.get().version_lock.try_lock(); })) {
+    auto& lock = it->second.word.get().version_lock;
+    if (!retry_yield<YIELD_RETRIES>([&lock] { return lock.try_lock(); })) {
       while (it != transaction->write_set.begin()) {
         --it;
 
-        it->word.get().version_lock.unlock();
+        it->second.word.get().version_lock.unlock();
       }
 
       delete transaction;
@@ -211,7 +211,7 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
       if (read_version == -1 || static_cast<std::uint64_t>(read_version) >
                                     transaction->read_version) {
         for (const auto it : transaction->write_set) {
-          it.word.get().version_lock.unlock();
+          it.second.word.get().version_lock.unlock();
         }
 
         delete transaction;
@@ -221,9 +221,9 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
   }
 
   for (const auto it : transaction->write_set) {
-    Block::Word& word = it.word.get();
+    Block::Word& word = it.second.word.get();
 
-    std::memcpy(&word.data, &it.value, region->align);
+    std::memcpy(&word.data, &it.second.value, region->align);
 
     word.version_lock.unlock_with_version(write_version);
   }
@@ -280,7 +280,7 @@ bool tm_read(shared_t shared,
                   &value, region->align);
     } else if (auto it = transaction->write_set.find(addr);
                it != transaction->write_set.end()) {
-      std::uint64_t value = it->second;
+      std::uint64_t value = it->second.value;
 
       // TODO: see if we can replace memcpy with a simple assign (word is
       // uint64)
@@ -337,6 +337,10 @@ bool tm_write(shared_t shared,
 
   const std::size_t word_count = size / region->align;
   const std::size_t virtual_address_start = reinterpret_cast<uintptr_t>(target);
+  const auto [block_index, block_offset] =
+      virtual_address::decode(virtual_address_start);
+  const std::size_t word_index = block_offset / region->align;
+  auto& block = region->ith_block(block_index);
 
   for (size_t i = 0; i < word_count; i++) {
     std::uint64_t value = 0;
@@ -344,7 +348,17 @@ bool tm_write(shared_t shared,
                 reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(source) +
                                         i * region->align),
                 region->align);
-    transaction->write_set[virtual_address_start + i * region->align] = value;
+
+    const std::size_t addr = virtual_address_start + i * region->align;
+    Block::Word& word = block.words[word_index + i];
+
+    auto first_insert =
+        transaction->write_set
+            .insert_or_assign(addr, Transaction::WriteLog{value, word})
+            .second;
+    if (!first_insert) {
+      transaction->read_set.erase(addr);
+    }
   }
 
   return true;
