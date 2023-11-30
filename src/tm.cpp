@@ -25,6 +25,8 @@
 #include "macros.hpp"
 #include "version_lock.hpp"
 
+constexpr std::size_t YIELD_RETRIES = 16;
+
 struct Block : NonCopyable {
   inline Block(const std::size_t size) noexcept : words(size) {}
   inline ~Block() noexcept {}
@@ -179,7 +181,8 @@ bool tm_end(shared_t shared, tx_t tx) noexcept {
 
   for (auto it = transaction->write_set.begin();
        it != transaction->write_set.end(); ++it) {
-    if (!it->second.word.get().version_lock.try_lock()) {
+    if (!retry_yield<YIELD_RETRIES>(
+            [it] { return it->second.word.get().version_lock.try_lock(); })) {
       while (it != transaction->write_set.begin()) {
         --it;
 
