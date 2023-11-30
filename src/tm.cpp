@@ -40,23 +40,26 @@ struct Block : NonCopyable {
 };
 
 struct Region : NonCopyable {
-  inline Region(const std::size_t size, const std::size_t align) noexcept
-      : align(align) {
-    // initial block
-    blocks.emplace_back(size / align);
+  inline Region(const std::size_t align) noexcept : align(align) {
+    blocks_index.reserve(256);
   }
   inline ~Region() noexcept {}
 
   inline auto ith_block(const std::size_t i) -> Block& {
-    auto ith = blocks.begin();
-    std::advance(ith, i);
-    return *ith;
+    return blocks_index[i];
+  }
+
+  inline auto add_block(const std::size_t size) -> std::size_t {
+    std::lock_guard<std::mutex> guard(alloc_mutex);
+    blocks_index.push_back(blocks.emplace_back(size / align));
+    return blocks_index.size() - 1;
   }
 
   const std::size_t align;
   std::mutex alloc_mutex;
   std::atomic<std::uint64_t> version_clock = 0;
   std::list<Block> blocks;
+  std::vector<std::reference_wrapper<Block>> blocks_index;
 };
 
 struct Transaction : NonCopyable {
@@ -101,12 +104,14 @@ inline auto decode(const VirtualAddress address)
  * @return Opaque shared memory region handle, 'invalid_shared' on failure
  **/
 shared_t tm_create(size_t size, size_t align) noexcept {
-  Region* region = new (std::nothrow) Region{size, align};
+  assert(align <= 8);
+
+  Region* region = new (std::nothrow) Region{align};
   if (region == nullptr) {
     return invalid_shared;
   }
 
-  assert(align <= 8);
+  region->add_block(size);
 
   return region;
 }
@@ -360,12 +365,8 @@ Alloc tm_alloc(shared_t shared, tx_t tx, size_t size, void** target) noexcept {
   [[maybe_unused]] Transaction* transaction =
       static_cast<Transaction*>(reinterpret_cast<void*>(tx));
 
-  {
-    std::lock_guard<std::mutex> guard(region->alloc_mutex);
-    std::size_t block_index = region->blocks.size();
-    region->blocks.emplace_back(size / region->align);
-    *target = reinterpret_cast<void*>(virtual_address::encode(block_index, 0));
-  }
+  std::size_t block_index = region->add_block(size);
+  *target = reinterpret_cast<void*>(virtual_address::encode(block_index, 0));
 
   return Alloc::success;
 }
