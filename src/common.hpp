@@ -16,10 +16,12 @@ struct NonCopyable {
 template <auto Start, auto End, class F>
 constexpr inline bool _retry_yield(F&& f) {
   if constexpr (Start < End) {
+    if constexpr (Start != 0) {
+      std::this_thread::yield();
+    }
     if (f()) {
       return true;
     }
-    std::this_thread::yield();
     return _retry_yield<Start + 1, End>(f);
   } else {
     return false;
