@@ -51,7 +51,7 @@ struct Region : NonCopyable {
 
   inline auto add_block(const std::size_t size) -> std::size_t {
     std::lock_guard<std::mutex> guard(alloc_mutex);
-    blocks_index.push_back(blocks.emplace_back(size / align));
+    blocks_index.emplace_back(blocks.emplace_back(size / align));
     return blocks_index.size() - 1;
   }
 
@@ -273,8 +273,6 @@ bool tm_read(shared_t shared,
         return false;
       }
 
-      // TODO: see if we can replace memcpy with a simple assign (word is
-      // uint64)
       std::memcpy(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(target) +
                                           i * region->align),
                   &value, region->align);
@@ -282,8 +280,6 @@ bool tm_read(shared_t shared,
                it != transaction->write_set.end()) {
       std::uint64_t value = it->second.value;
 
-      // TODO: see if we can replace memcpy with a simple assign (word is
-      // uint64)
       std::memcpy(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(target) +
                                           i * region->align),
                   &value, region->align);
@@ -298,8 +294,6 @@ bool tm_read(shared_t shared,
         return false;
       }
 
-      // TODO: see if we can replace memcpy with a simple assign (word is
-      // uint64)
       std::memcpy(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(target) +
                                           i * region->align),
                   &word.data, region->align);
