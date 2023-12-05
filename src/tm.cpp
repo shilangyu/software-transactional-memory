@@ -27,11 +27,11 @@
 
 constexpr std::size_t YIELD_RETRIES = 16;
 
-struct Block : NonCopyable {
+struct Block {
   inline Block(const std::size_t size) noexcept : words(size) {}
   inline ~Block() noexcept {}
 
-  struct Word : NonCopyable {
+  struct Word {
     VersionLock version_lock{};
     std::uint64_t data = 0;
   };
@@ -41,25 +41,22 @@ struct Block : NonCopyable {
 
 struct Region : NonCopyable {
   inline Region(const std::size_t align) noexcept : align(align) {
-    blocks_index.reserve(256);
+    blocks.reserve(512);
   }
   inline ~Region() noexcept {}
 
-  inline auto ith_block(const std::size_t i) -> Block& {
-    return blocks_index[i];
-  }
+  inline auto ith_block(const std::size_t i) -> Block& { return blocks[i]; }
 
   inline auto add_block(const std::size_t size) -> std::size_t {
     std::lock_guard<std::mutex> guard(alloc_mutex);
-    blocks_index.emplace_back(blocks.emplace_back(size / align));
-    return blocks_index.size() - 1;
+    blocks.emplace_back(size / align);
+    return blocks.size() - 1;
   }
 
   const std::size_t align;
   std::mutex alloc_mutex;
   std::atomic<std::uint64_t> version_clock = 0;
-  std::list<Block> blocks;
-  std::vector<std::reference_wrapper<Block>> blocks_index;
+  std::vector<Block> blocks;
 };
 
 struct Transaction : NonCopyable {
@@ -346,13 +343,8 @@ bool tm_write(shared_t shared,
     const std::size_t addr = virtual_address_start + i * region->align;
     Block::Word& word = block.words[word_index + i];
 
-    auto first_insert =
-        transaction->write_set
-            .insert_or_assign(addr, Transaction::WriteLog{value, word})
-            .second;
-    if (!first_insert) {
-      transaction->read_set.erase(addr);
-    }
+    transaction->write_set.insert_or_assign(addr,
+                                            Transaction::WriteLog{value, word});
   }
 
   return true;

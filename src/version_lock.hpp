@@ -7,6 +7,9 @@ struct VersionLock {
   std::atomic<std::uint64_t> lock = 0;
 
  public:
+  VersionLock() {}
+  VersionLock(const VersionLock& other) : lock(other.lock.load()) {}
+
   inline auto try_lock() -> bool {
     std::uint64_t value = lock;
 
