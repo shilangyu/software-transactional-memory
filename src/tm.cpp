@@ -44,9 +44,11 @@ struct Region : NonCopyable {
   }
   inline ~Region() noexcept {}
 
-  inline auto ith_block(const std::size_t i) -> Block& { return blocks[i]; }
+  inline auto ith_block(const std::size_t i) noexcept -> Block& {
+    return blocks[i];
+  }
 
-  inline auto add_block(const std::size_t size) -> std::size_t {
+  inline auto add_block(const std::size_t size) noexcept -> std::size_t {
     std::lock_guard<std::mutex> guard(alloc_mutex);
     blocks.emplace_back(size / align);
     return blocks.size() - 1;
@@ -79,12 +81,12 @@ namespace virtual_address {
 using VirtualAddress = std::uintptr_t;
 constexpr std::size_t OFFSET_SIZE = 48;
 
-inline auto encode(const std::size_t block_index, const std::size_t offset)
-    -> VirtualAddress {
+inline auto encode(const std::size_t block_index,
+                   const std::size_t offset) noexcept -> VirtualAddress {
   return ((block_index + 1) << OFFSET_SIZE) | offset;
 }
 
-inline auto decode(const VirtualAddress address)
+inline auto decode(const VirtualAddress address) noexcept
     -> std::tuple<std::size_t, std::size_t> {
   return {(address >> OFFSET_SIZE) - 1,
           address & ((static_cast<uint64_t>(1) << OFFSET_SIZE) - 1)};
