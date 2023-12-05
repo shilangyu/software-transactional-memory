@@ -22,7 +22,6 @@
 #include <vector>
 
 #include "common.hpp"
-#include "macros.hpp"
 #include "version_lock.hpp"
 
 constexpr std::size_t YIELD_RETRIES = 16;
@@ -126,7 +125,7 @@ void tm_destroy(shared_t shared) noexcept {
  * @param shared Shared memory region to query
  * @return Start address of the first allocated segment
  **/
-void* tm_start(shared_t unused(shared)) noexcept {
+void* tm_start([[maybe_unused]] shared_t shared) noexcept {
   return reinterpret_cast<void*>(virtual_address::encode(0, 0));
 }
 
@@ -378,9 +377,9 @@ Alloc tm_alloc(shared_t shared, tx_t tx, size_t size, void** target) noexcept {
  *to deallocate
  * @return Whether the whole transaction can continue
  **/
-bool tm_free(shared_t unused(shared),
-             tx_t unused(tx),
-             void* unused(target)) noexcept {
-  // TODO: tm_free(shared_t, tx_t, void*)
+bool tm_free([[maybe_unused]] shared_t shared,
+             [[maybe_unused]] tx_t tx,
+             [[maybe_unused]] void* target) noexcept {
+  // freeing delayed till tm_destroy
   return true;
 }
